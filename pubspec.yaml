@@ -1,0 +1,39 @@
+name: qr_security_scanner
+description: A Flutter app for QR code security analysis using TensorFlow Lite.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # TensorFlow Lite for ML inference
+  tflite_flutter: ^0.10.0
+  
+  # Image handling
+  image_picker: ^0.8.9
+  image: ^4.1.3
+  
+  # Camera functionality
+  camera: ^0.10.5+5
+  
+  # File operations
+  path_provider: ^2.1.1
+  
+  # UI components
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  
+  # Add your model and labels here
+  assets:
+    - assets/
