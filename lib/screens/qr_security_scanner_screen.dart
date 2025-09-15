@@ -1,6 +1,5 @@
 // File: lib/screens/qr_security_scanner_screen.dart
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
@@ -16,7 +15,7 @@ class QRSecurityScannerScreen extends StatefulWidget {
 class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
   // Static image analysis
   File? _selectedImage;
-  QRClassificationResult? _result;
+  QRSecurityResult? _result;
   bool _isLoading = false;
   String _errorMessage = '';
   final ImagePicker _picker = ImagePicker();
@@ -27,11 +26,11 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
   bool _isCameraInitialized = false;
   bool _isRealTimeMode = false;
   bool _isAnalyzing = false;
-  QRClassificationResult? _realtimeResult;
+  QRSecurityResult? _realtimeResult;
   DateTime? _lastAnalysisTime;
   
-  // Analysis throttling - faster due to smaller model
-  static const Duration _analysisInterval = Duration(milliseconds: 800);
+  // Analysis throttling
+  static const Duration _analysisInterval = Duration(milliseconds: 1000);
 
   @override
   void initState() {
@@ -98,20 +97,23 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Mode Toggle Info
+          // QR Code Only Notice
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.blue.shade50,
+              color: Colors.orange.shade50,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.shade200),
+              border: Border.all(color: Colors.orange.shade200),
             ),
             child: Row(
               children: [
-                Icon(Icons.info, color: Colors.blue.shade700),
+                Icon(Icons.qr_code_2, color: Colors.orange.shade700),
                 const SizedBox(width: 12),
                 const Expanded(
-                  child: Text('Static Mode: Select images for detailed analysis. Tap the camera icon above for real-time scanning.'),
+                  child: Text(
+                    'QR CODES ONLY: This app only analyzes QR code images. Other images will be rejected.',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 ),
               ],
             ),
@@ -135,7 +137,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
                     Icon(Icons.psychology, color: Colors.green.shade700),
                     const SizedBox(width: 8),
                     Text(
-                      'CNN Model Info',
+                      'CNN Security Model',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         color: Colors.green.shade800,
@@ -145,7 +147,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Input: 69×69 grayscale • Output: Sigmoid (0-1) • Threshold: 0.5',
+                  'Detects malicious QR patterns • 69×69 grayscale input • Sigmoid output',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.green.shade700,
@@ -183,6 +185,15 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
                           style: TextStyle(
                             fontSize: 16,
                             color: Colors.grey,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Only QR code images will be processed',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                            fontStyle: FontStyle.italic,
                           ),
                         ),
                       ],
@@ -227,7 +238,13 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
               children: [
                 CircularProgressIndicator(),
                 SizedBox(height: 16),
-                Text('Analyzing QR code with CNN model...'),
+                Text('Analyzing QR code...'),
+                SizedBox(height: 8),
+                Text(
+                  '1. Detecting QR code patterns\n2. Running CNN security analysis',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
               ],
             ),
 
@@ -261,6 +278,278 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
     );
   }
 
+  Widget _buildResultsSection(QRSecurityResult result) {
+    if (!result.hasQRCode) {
+      // No QR code detected
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.shade200, width: 2),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              Icons.warning,
+              size: 48,
+              color: Colors.orange.shade600,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'NO QR CODE DETECTED',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange.shade800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              result.qrDetection.reason,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.orange.shade700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Detection Confidence: ${result.qrDetection.confidencePercentage}',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.orange.shade600,
+              ),
+            ),
+            if (result.qrDetection.imageSize != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Image Size: ${result.qrDetection.imageSize}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.orange.shade600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            const Text(
+              'Please select an image that contains a clear QR code for security analysis.',
+              style: TextStyle(fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+
+    // QR code detected and analyzed
+    final classification = result.classificationResult!;
+    final isMalicious = classification.isMalicious;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // QR Detection Success
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.blue.shade700),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'QR Code Detected Successfully',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade800,
+                      ),
+                    ),
+                    Text(
+                      'Detection confidence: ${result.qrDetection.confidencePercentage}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Main Security Result Card
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: isMalicious ? Colors.red.shade50 : Colors.green.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isMalicious ? Colors.red.shade200 : Colors.green.shade200,
+              width: 2,
+            ),
+          ),
+          child: Column(
+            children: [
+              Icon(
+                isMalicious ? Icons.dangerous : Icons.security,
+                size: 48,
+                color: isMalicious ? Colors.red.shade600 : Colors.green.shade600,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                isMalicious ? 'MALICIOUS QR CODE' : 'BENIGN QR CODE',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: isMalicious ? Colors.red.shade800 : Colors.green.shade800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Confidence: ${classification.confidencePercentage}',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: isMalicious ? Colors.red.shade700 : Colors.green.shade700,
+                ),
+              ),
+              Text(
+                'Risk Level: ${classification.riskLevel}',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isMalicious ? Colors.red.shade600 : Colors.green.shade600,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Technical Details Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.analytics, color: Colors.grey.shade700),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Analysis Details',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _buildTechnicalDetail('QR Detection', '${result.qrDetection.confidencePercentage} confidence'),
+              _buildTechnicalDetail('Model Output', classification.debugInfo),
+              _buildTechnicalDetail('Classification', classification.thresholdInfo),
+              _buildTechnicalDetail('Architecture', 'CNN: Conv + Pool + GAP + Sigmoid'),
+              if (result.qrDetection.imageSize != null)
+                _buildTechnicalDetail('Image Size', result.qrDetection.imageSize!),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Security Warning/Info
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isMalicious ? Colors.orange.shade50 : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isMalicious ? Colors.orange.shade200 : Colors.blue.shade200,
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                isMalicious ? Icons.warning : Icons.info,
+                color: isMalicious ? Colors.orange.shade700 : Colors.blue.shade700,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  isMalicious
+                      ? 'SECURITY ALERT: This QR code shows suspicious visual patterns that may indicate malicious intent. Do not scan with standard QR readers. Verify the source before use.'
+                      : 'This QR code appears to have normal visual patterns. However, always be cautious about the content it links to and verify the source.',
+                  style: TextStyle(
+                    color: isMalicious ? Colors.orange.shade800 : Colors.blue.shade800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Detailed Scores (Expandable)
+        ExpansionTile(
+          title: const Text('Detailed Analysis'),
+          subtitle: Text('Raw model outputs and probabilities'),
+          children: [
+            ...classification.allScores.entries.map(
+              (entry) => ListTile(
+                title: Text(entry.key.toUpperCase()),
+                subtitle: Text('Model probability score'),
+                trailing: Text(
+                  '${(entry.value * 100).toStringAsFixed(2)}%',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            ListTile(
+              title: const Text('Raw Sigmoid Output'),
+              subtitle: const Text('Direct model activation value'),
+              trailing: Text(
+                classification.rawOutput.toStringAsFixed(4),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+            ListTile(
+              title: const Text('QR Detection Score'),
+              subtitle: const Text('Pattern detection confidence'),
+              trailing: Text(
+                result.qrDetection.confidencePercentage,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildRealtimeView() {
     if (!_isCameraInitialized || _cameraController == null) {
       return const Center(
@@ -277,26 +566,39 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
 
     return Stack(
       children: [
-        // Camera Preview
+        // Fixed Camera Preview with proper aspect ratio
         Positioned.fill(
-          child: CameraPreview(_cameraController!),
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _cameraController!.value.previewSize!.height,
+              height: _cameraController!.value.previewSize!.width,
+              child: CameraPreview(_cameraController!),
+            ),
+          ),
         ),
         
-        // Overlay for QR detection area with 69x69 aspect ratio guide
+        // Alternative approach - use AspectRatio widget
+        // Positioned.fill(
+        //   child: Center(
+        //     child: AspectRatio(
+        //       aspectRatio: _cameraController!.value.aspectRatio,
+        //       child: CameraPreview(_cameraController!),
+        //     ),
+        //   ),
+        // ),
+        
+        // QR Detection Overlay
         Positioned.fill(
           child: Container(
             margin: const EdgeInsets.all(50),
             child: Center(
               child: AspectRatio(
-                aspectRatio: 1.0, // Square aspect ratio for 69x69
+                aspectRatio: 1.0,
                 child: Container(
                   decoration: BoxDecoration(
                     border: Border.all(
-                      color: _realtimeResult?.isMalicious == true 
-                          ? Colors.red.withOpacity(0.8)
-                          : _realtimeResult?.isMalicious == false 
-                              ? Colors.green.withOpacity(0.8)
-                              : Colors.white.withOpacity(0.8),
+                      color: _getOverlayColor(),
                       width: 3,
                     ),
                   ),
@@ -315,7 +617,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
           ),
         ),
 
-        // Instructions overlay
+        // Instructions
         Positioned(
           top: 50,
           left: 16,
@@ -339,7 +641,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'CNN Model: 69×69 grayscale input',
+                  'QR Detection + CNN Security Analysis',
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.8),
                     fontSize: 12,
@@ -400,12 +702,69 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
       ],
     );
   }
+  
+  Color _getOverlayColor() {
+    if (_realtimeResult?.hasQRCode == true) {
+      return _realtimeResult!.classificationResult!.isMalicious 
+          ? Colors.red.withOpacity(0.8)
+          : Colors.green.withOpacity(0.8);
+    } else if (_realtimeResult?.hasQRCode == false) {
+      return Colors.orange.withOpacity(0.8); // No QR detected
+    }
+    return Colors.white.withOpacity(0.8);
+  }
 
-  Widget _buildRealtimeResultsOverlay(QRClassificationResult result) {
+  Widget _buildRealtimeResultsOverlay(QRSecurityResult result) {
+    if (!result.hasQRCode) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.search, color: Colors.white, size: 28),
+                SizedBox(width: 12),
+                Text(
+                  'SCANNING...',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No QR code detected',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+              ),
+            ),
+            Text(
+              'Detection: ${result.qrDetection.confidencePercentage}',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.9),
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final classification = result.classificationResult!;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: result.isMalicious 
+        color: classification.isMalicious 
             ? Colors.red.withOpacity(0.9) 
             : Colors.green.withOpacity(0.9),
         borderRadius: BorderRadius.circular(12),
@@ -417,13 +776,13 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                result.isMalicious ? Icons.dangerous : Icons.security,
+                classification.isMalicious ? Icons.dangerous : Icons.security,
                 color: Colors.white,
                 size: 28,
               ),
               const SizedBox(width: 12),
               Text(
-                result.isMalicious ? 'MALICIOUS' : 'BENIGN',
+                classification.isMalicious ? 'MALICIOUS' : 'BENIGN',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 20,
@@ -434,14 +793,14 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Confidence: ${result.confidencePercentage}',
+            'Confidence: ${classification.confidencePercentage}',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 16,
             ),
           ),
           Text(
-            result.thresholdInfo,
+            'QR Detection: ${result.qrDetection.confidencePercentage}',
             style: TextStyle(
               color: Colors.white.withOpacity(0.9),
               fontSize: 12,
@@ -452,170 +811,6 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
     );
   }
 
-  Widget _buildResultsSection(QRClassificationResult result) {
-    final isMalicious = result.isMalicious;
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Main Result Card
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: isMalicious ? Colors.red.shade50 : Colors.green.shade50,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isMalicious ? Colors.red.shade200 : Colors.green.shade200,
-              width: 2,
-            ),
-          ),
-          child: Column(
-            children: [
-              Icon(
-                isMalicious ? Icons.dangerous : Icons.security,
-                size: 48,
-                color: isMalicious ? Colors.red.shade600 : Colors.green.shade600,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                isMalicious ? 'MALICIOUS QR CODE' : 'BENIGN QR CODE',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: isMalicious ? Colors.red.shade800 : Colors.green.shade800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Confidence: ${result.confidencePercentage}',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: isMalicious ? Colors.red.shade700 : Colors.green.shade700,
-                ),
-              ),
-              Text(
-                'Risk Level: ${result.riskLevel}',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isMalicious ? Colors.red.shade600 : Colors.green.shade600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                result.thresholdInfo,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey.shade600,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Technical Details Card
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade50,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.psychology, color: Colors.grey.shade700),
-                  const SizedBox(width: 8),
-                  Text(
-                    'CNN Model Analysis',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade800,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _buildTechnicalDetail('Input Size', '69×69 pixels (grayscale)'),
-              _buildTechnicalDetail('Model Output', result.debugInfo),
-              _buildTechnicalDetail('Classification', result.thresholdInfo),
-              _buildTechnicalDetail('Architecture', 'CNN: 3 Conv Blocks + GAP + Sigmoid'),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Warning/Info Message
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isMalicious ? Colors.orange.shade50 : Colors.blue.shade50,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isMalicious ? Colors.orange.shade200 : Colors.blue.shade200,
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                isMalicious ? Icons.warning : Icons.info,
-                color: isMalicious ? Colors.orange.shade700 : Colors.blue.shade700,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  isMalicious
-                      ? 'This QR code appears to have suspicious visual patterns detected by our CNN model. Avoid scanning it with QR code readers.'
-                      : 'This QR code appears to have normal visual patterns according to our CNN model. However, always be cautious about the content it links to.',
-                  style: TextStyle(
-                    color: isMalicious ? Colors.orange.shade800 : Colors.blue.shade800,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Detailed Scores (Expandable)
-        ExpansionTile(
-          title: const Text('Detailed Analysis'),
-          children: [
-            ...result.allScores.entries.map(
-              (entry) => ListTile(
-                title: Text(entry.key.toUpperCase()),
-                subtitle: Text('Sigmoid-based probability'),
-                trailing: Text(
-                  '${(entry.value * 100).toStringAsFixed(2)}%',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
-            ListTile(
-              title: const Text('Raw Model Output'),
-              subtitle: const Text('Direct sigmoid activation value'),
-              trailing: Text(
-                result.rawOutput.toStringAsFixed(4),
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   Widget _buildTechnicalDetail(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -623,7 +818,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 100,
+            width: 120,
             child: Text(
               '$label:',
               style: TextStyle(
@@ -675,11 +870,9 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
     }
 
     try {
-      // Check if enough time has passed since last analysis
       final now = DateTime.now();
       if (_lastAnalysisTime != null && 
           now.difference(_lastAnalysisTime!) < _analysisInterval) {
-        // Wait a bit before next analysis
         await Future.delayed(const Duration(milliseconds: 100));
         if (_isAnalyzing) _startRealtimeAnalysis();
         return;
@@ -687,10 +880,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
 
       _lastAnalysisTime = now;
       
-      // Capture frame from camera
       final XFile imageFile = await _cameraController!.takePicture();
-      
-      // Analyze the frame
       final result = await QRTFLiteHelper.classifyQRImage(File(imageFile.path));
       
       if (mounted && _isAnalyzing) {
@@ -699,18 +889,15 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen> {
         });
       }
       
-      // Clean up the temporary file
       File(imageFile.path).delete().catchError((e) => print('Error deleting temp file: $e'));
       
-      // Continue analysis if still active
       if (_isAnalyzing) {
         _startRealtimeAnalysis();
       }
     } catch (e) {
       print('Real-time analysis error: $e');
-      // Continue analysis despite errors, but with a longer delay
       if (_isAnalyzing) {
-        await Future.delayed(const Duration(milliseconds: 1000));
+        await Future.delayed(const Duration(milliseconds: 2000));
         _startRealtimeAnalysis();
       }
     }

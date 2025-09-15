@@ -62,7 +62,7 @@ class _ModelInitializationWrapperState extends State<ModelInitializationWrapper>
       
       // Check for our specific assets
       final ourAssets = [
-        'assets/qr_security_model.tflite',
+        'assets/qr_cnn_float32.tflite',
         'assets/labels.txt',
       ];
       
@@ -105,7 +105,7 @@ class _ModelInitializationWrapperState extends State<ModelInitializationWrapper>
       
       // Initialize the QR security model
       await QRTFLiteHelper.init(
-        modelPath: 'assets/qr_security_model.tflite',
+        modelPath: 'assets/qr_cnn_float32.tflite',
         labelsPath: 'assets/labels.txt',
       );
       
