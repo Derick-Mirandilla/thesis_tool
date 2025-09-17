@@ -12,6 +12,7 @@ dependencies:
   
   # TensorFlow Lite for ML inference
   tflite_flutter: ^0.10.0
+  mobile_scanner: ^7.0.1
   
   # Image handling
   image_picker: ^0.8.9
@@ -36,4 +37,5 @@ flutter:
   
   # Add your model and labels here
   assets:
-    - assets/
+    - assets/models/qr_security_model.tflite
+    - assets/models/labels.txt

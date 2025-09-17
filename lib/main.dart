@@ -1,11 +1,10 @@
+// File: lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:convert';
-import 'helpers/qr_tflite_helper.dart';
+import 'services/qr_security_model_service.dart';
 import 'screens/qr_security_scanner_screen.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+void main() {
   runApp(const QRSecurityApp());
 }
 
@@ -19,267 +18,276 @@ class QRSecurityApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          centerTitle: true,
+          elevation: 2,
+        ),
       ),
-      home: const ModelInitializationWrapper(),
+      home: const SplashScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class ModelInitializationWrapper extends StatefulWidget {
-  const ModelInitializationWrapper({Key? key}) : super(key: key);
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({Key? key}) : super(key: key);
 
   @override
-  State<ModelInitializationWrapper> createState() => _ModelInitializationWrapperState();
+  State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _ModelInitializationWrapperState extends State<ModelInitializationWrapper> {
-  bool _isInitializing = true;
-  String? _initializationError;
-  List<String> _debugInfo = [];
+class _SplashScreenState extends State<SplashScreen> 
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+  String _status = 'Initializing AI Model...';
+  bool _hasError = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeModel();
+    
+    _animationController = AnimationController(
+      duration: const Duration(seconds: 1),
+      vsync: this,
+    );
+    
+    _fadeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    ));
+    
+    _animationController.forward();
+    _initializeApp();
   }
 
-  Future<void> _debugAssets() async {
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initializeApp() async {
     try {
-      _debugInfo.add("=== ASSET DEBUG INFO ===");
+      // Add a delay for splash screen effect
+      await Future.delayed(const Duration(milliseconds: 1500));
       
-      // Get the asset manifest
-      final manifestContent = await rootBundle.loadString('AssetManifest.json');
-      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
-      
-      _debugInfo.add("📁 ALL AVAILABLE ASSETS:");
-      manifestMap.keys.forEach((key) {
-        _debugInfo.add("  - $key");
-        print("  - $key");
+      setState(() {
+        _status = 'Loading TensorFlow Lite Model...';
       });
       
-      _debugInfo.add("\n🔍 CHECKING OUR SPECIFIC ASSETS:");
+      // Initialize the AI model
+      final success = await QRSecurityModelService.initialize();
       
-      // Check for our specific assets
-      final ourAssets = [
-        'assets/qr_cnn_float32.tflite',
-        'assets/labels.txt',
-      ];
-      
-      for (String asset in ourAssets) {
-        if (manifestMap.containsKey(asset)) {
-          try {
-            final data = await rootBundle.load(asset);
-            _debugInfo.add("  ✅ Found: $asset (${data.lengthInBytes} bytes)");
-            print("  ✅ Found: $asset (${data.lengthInBytes} bytes)");
-          } catch (e) {
-            _debugInfo.add("  ❌ Found in manifest but can't load: $asset - $e");
-            print("  ❌ Found in manifest but can't load: $asset - $e");
-          }
-        } else {
-          _debugInfo.add("  ❌ Missing: $asset");
-          print("  ❌ Missing: $asset");
+      if (success) {
+        setState(() {
+          _status = 'Model Ready!';
+        });
+        
+        // Wait a bit before navigating
+        await Future.delayed(const Duration(milliseconds: 800));
+        
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => const QRSecurityScannerScreen(),
+            ),
+          );
         }
+      } else {
+        setState(() {
+          _hasError = true;
+          _status = 'Failed to load AI model: ${QRSecurityModelService.initializationError}';
+        });
       }
-      
-      // Try to read labels
-      try {
-        final labelsContent = await rootBundle.loadString('assets/labels.txt');
-        _debugInfo.add("📝 Labels content: '$labelsContent'");
-        print("📝 Labels content: '$labelsContent'");
-      } catch (e) {
-        _debugInfo.add("❌ Labels read error: $e");
-        print("❌ Labels read error: $e");
-      }
-      
     } catch (e) {
-      _debugInfo.add("❌ Asset debug failed: $e");
-      print("❌ Asset debug failed: $e");
+      setState(() {
+        _hasError = true;
+        _status = 'Initialization error: $e';
+      });
     }
   }
 
-  Future<void> _initializeModel() async {
-    try {
-      // Debug assets first
-      await _debugAssets();
-      
-      // Initialize the QR security model
-      await QRTFLiteHelper.init(
-        modelPath: 'assets/qr_cnn_float32.tflite',
-        labelsPath: 'assets/labels.txt',
-      );
-      
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-        });
-      }
-    } catch (e) {
-      print('Failed to initialize model: $e');
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-          _initializationError = e.toString();
-        });
-      }
-    }
+  Future<void> _retryInitialization() async {
+    setState(() {
+      _hasError = false;
+      _status = 'Retrying initialization...';
+    });
+    
+    await _initializeApp();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isInitializing) {
-      return Scaffold(
-        body: Center(
+    return Scaffold(
+      backgroundColor: Colors.blue.shade50,
+      body: Center(
+        child: FadeTransition(
+          opacity: _fadeAnimation,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              const Text('Initializing QR Security Model...'),
-              const SizedBox(height: 8),
-              const Text(
-                'Loading CNN model (69×69 grayscale)',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                ),
-              ),
-              if (_debugInfo.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                const Text('Debug Info:', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                Container(
-                  height: 200,
-                  width: double.infinity,
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SingleChildScrollView(
-                    child: Text(
-                      _debugInfo.join('\n'),
-                      style: const TextStyle(
-                        color: Colors.green,
-                        fontFamily: 'monospace',
-                        fontSize: 10,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_initializationError != null) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('QR Security Scanner'),
-          backgroundColor: Colors.red.shade700,
-          foregroundColor: Colors.white,
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Icon(
-                Icons.error,
-                size: 64,
-                color: Colors.red.shade600,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Model Initialization Failed',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
+              // App Icon/Logo
               Container(
-                padding: const EdgeInsets.all(16),
+                width: 120,
+                height: 120,
                 decoration: BoxDecoration(
-                  color: Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.shade200),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Error Details:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _initializationError!,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                        color: Colors.red.shade800,
-                      ),
+                  color: Colors.blue.shade700,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.blue.withOpacity(0.3),
+                      blurRadius: 10,
+                      offset: const Offset(0, 5),
                     ),
                   ],
                 ),
+                child: const Icon(
+                  Icons.qr_code_scanner,
+                  color: Colors.white,
+                  size: 60,
+                ),
               ),
-              if (_debugInfo.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(8),
+              
+              const SizedBox(height: 30),
+              
+              // App Title
+              Text(
+                'QR Security Scanner',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade800,
+                ),
+              ),
+              
+              const SizedBox(height: 10),
+              
+              // Subtitle
+              Text(
+                'AI-Powered Malicious QR Detection',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.blue.shade600,
+                ),
+              ),
+              
+              const SizedBox(height: 50),
+              
+              // Loading indicator or error state
+              if (!_hasError) ...[
+                SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade700),
+                    strokeWidth: 3,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Debug Information:',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        height: 200,
-                        child: SingleChildScrollView(
-                          child: Text(
-                            _debugInfo.join('\n'),
-                            style: const TextStyle(
-                              color: Colors.green,
-                              fontFamily: 'monospace',
-                              fontSize: 10,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                ),
+                const SizedBox(height: 20),
+              ],
+              
+              // Status text
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 30),
+                child: Text(
+                  _status,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: _hasError ? Colors.red.shade600 : Colors.blue.shade700,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              
+              // Retry button (only shown on error)
+              if (_hasError) ...[
+                const SizedBox(height: 30),
+                ElevatedButton.icon(
+                  onPressed: _retryInitialization,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                 ),
               ],
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _isInitializing = true;
-                    _initializationError = null;
-                    _debugInfo.clear();
-                  });
-                  _initializeModel();
-                },
-                child: const Text('Retry Initialization'),
-              ),
             ],
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
+}
 
-    return const QRSecurityScannerScreen();
+// Additional helper widgets for the app
+
+class LoadingDialog extends StatelessWidget {
+  final String message;
+
+  const LoadingDialog({
+    Key? key,
+    this.message = 'Processing...',
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 20),
+            Text(message),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ErrorDialog extends StatelessWidget {
+  final String title;
+  final String message;
+  final VoidCallback? onRetry;
+
+  const ErrorDialog({
+    Key? key,
+    required this.title,
+    required this.message,
+    this.onRetry,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        if (onRetry != null)
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onRetry!();
+            },
+            child: const Text('Retry'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('OK'),
+        ),
+      ],
+    );
   }
 }
