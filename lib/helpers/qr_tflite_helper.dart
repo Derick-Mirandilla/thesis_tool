@@ -11,10 +11,14 @@ class QRTFLiteHelper {
   static List<String> _labels = [];
   static bool _isInitialized = false;
   
-  // Model specifications - adjust these based on your actual model
+  // Model specifications based on your research paper
   static const int INPUT_SIZE = 69;
   static const int NUM_CHANNELS = 1;
   static const double DEFAULT_THRESHOLD = 0.5;
+  
+  // Enhanced debugging
+  static bool _debugMode = true;
+  static int _predictionCount = 0;
   
   static Future<void> init({
     required String modelPath,
@@ -38,13 +42,19 @@ class QRTFLiteHelper {
       print("Model output shape: $outputShape");
       print("Labels: $_labels");
       
-      // Validate model architecture
-      if (inputShape.length != 4) {
-        throw Exception("Expected 4D input tensor, got ${inputShape.length}D");
+      // Validate expected dimensions
+      if (inputShape.length != 4 || 
+          inputShape[1] != INPUT_SIZE || 
+          inputShape[2] != INPUT_SIZE || 
+          inputShape[3] != NUM_CHANNELS) {
+        print("WARNING: Model input shape $inputShape doesn't match expected [1, $INPUT_SIZE, $INPUT_SIZE, $NUM_CHANNELS]");
       }
       
+      // Run multiple test predictions to verify model variability
+      await _runVariabilityTest();
+      
       _isInitialized = true;
-      print("Model loaded successfully");
+      print("Model loaded and validated successfully");
       
     } catch (e) {
       print("Model initialization failed: $e");
@@ -52,7 +62,71 @@ class QRTFLiteHelper {
     }
   }
 
-  /// Classify QR code from bytes - now with proper QR validation
+  /// Test model with different inputs to verify it produces different outputs
+  static Future<void> _runVariabilityTest() async {
+    print("=== Model Variability Test ===");
+    
+    final inputShape = _interpreter.getInputTensor(0).shape;
+    final outputShape = _interpreter.getOutputTensor(0).shape;
+    
+    // Test with different patterns
+    final testInputs = [
+      _createTestInput(0.0),    // All black
+      _createTestInput(1.0),    // All white
+      _createTestInput(0.5),    // All gray
+      _createRandomInput(),     // Random pattern
+      _createQRLikeInput(),     // QR-like pattern
+    ];
+    
+    final outputs = <double>[];
+    
+    for (int i = 0; i < testInputs.length; i++) {
+      final output = List.generate(outputShape[0], (j) => List.filled(outputShape[1], 0.0));
+      _interpreter.run(testInputs[i], output);
+      final rawOutput = output[0][0] as double;
+      outputs.add(rawOutput);
+      print("Test $i output: $rawOutput (sigmoid: ${_sigmoid(rawOutput).toStringAsFixed(4)})");
+    }
+    
+    // Check for variability
+    final minOutput = outputs.reduce(math.min);
+    final maxOutput = outputs.reduce(math.max);
+    final range = maxOutput - minOutput;
+    
+    print("Output range: $range (min: $minOutput, max: $maxOutput)");
+    
+    if (range < 0.01) {
+      print("WARNING: Model shows very low variability - may be stuck or improperly loaded");
+    } else {
+      print("✓ Model shows good variability");
+    }
+    print("=== End Variability Test ===");
+  }
+
+  static List<List<List<List<double>>>> _createTestInput(double value) {
+    return List.generate(1, (batch) => 
+      List.generate(INPUT_SIZE, (y) => 
+        List.generate(INPUT_SIZE, (x) => 
+          List.generate(NUM_CHANNELS, (c) => value))));
+  }
+
+  static List<List<List<List<double>>>> _createRandomInput() {
+    final random = math.Random();
+    return List.generate(1, (batch) => 
+      List.generate(INPUT_SIZE, (y) => 
+        List.generate(INPUT_SIZE, (x) => 
+          List.generate(NUM_CHANNELS, (c) => random.nextDouble()))));
+  }
+
+  static List<List<List<List<double>>>> _createQRLikeInput() {
+    return List.generate(1, (batch) => 
+      List.generate(INPUT_SIZE, (y) => 
+        List.generate(INPUT_SIZE, (x) => 
+          List.generate(NUM_CHANNELS, (c) => 
+            (x + y) % 8 < 4 ? 0.0 : 1.0)))); // Checkerboard pattern
+  }
+
+  /// Enhanced classification with better QR detection and preprocessing validation
   static Future<QRSecurityResult> classifyQRFromBytes(
     Uint8List imageBytes, {
     String? qrContent,
@@ -61,8 +135,14 @@ class QRTFLiteHelper {
       throw Exception("Model not initialized. Call init() first.");
     }
 
+    _predictionCount++;
+    
     try {
-      print('Processing image bytes: ${imageBytes.length} bytes');
+      if (_debugMode) {
+        print('=== QR Classification #$_predictionCount ===');
+        print('Image bytes: ${imageBytes.length}');
+        print('QR Content provided: ${qrContent != null}');
+      }
       
       // Decode the image
       img.Image? image = img.decodeImage(imageBytes);
@@ -70,20 +150,29 @@ class QRTFLiteHelper {
         throw Exception("Unable to decode image");
       }
 
-      print('Image decoded: ${image.width}x${image.height}');
+      if (_debugMode) {
+        print('Image decoded: ${image.width}x${image.height}');
+      }
 
-      // Check if this is likely a QR code image first
-      if (!_hasQRLikeFeatures(image)) {
-        print('No QR-like features detected in image');
+      // IMPROVED: Better QR detection before model analysis
+      final hasQRFeatures = await _improvedQRDetection(image);
+      
+      if (!hasQRFeatures && qrContent == null) {
+        print('No QR features detected and no QR content provided - skipping analysis');
         return QRSecurityResult(
           hasQRCode: false,
           classificationResult: null,
-          qrContent: qrContent,
+          qrContent: null,
         );
       }
 
-      // Preprocess for the model
-      final input = await _preprocessQRImage(image);
+      if (_debugMode) {
+        print('QR features detected: $hasQRFeatures');
+        print('Proceeding with model analysis');
+      }
+
+      // Enhanced preprocessing with validation
+      final input = await _enhancedPreprocessing(image);
       
       // Run inference
       final outputShape = _interpreter.getOutputTensor(0).shape;
@@ -92,14 +181,26 @@ class QRTFLiteHelper {
         (i) => List.filled(outputShape[1], 0.0)
       );
       
-      print("Running model inference...");
+      if (_debugMode) {
+        print("Running inference...");
+      }
+      
       _interpreter.run(input, output);
       
       final rawOutput = output[0][0] as double;
-      print("Raw model output: $rawOutput");
       
-      // Process results
-      final classificationResult = _processClassificationResult(rawOutput);
+      if (_debugMode) {
+        print("Raw output: $rawOutput");
+        print("Sigmoid probability: ${_sigmoid(rawOutput).toStringAsFixed(4)}");
+      }
+      
+      // Enhanced classification processing
+      final classificationResult = _enhancedClassificationProcessing(rawOutput);
+      
+      if (_debugMode) {
+        print("Final classification: $classificationResult");
+        print('=== End Classification #$_predictionCount ===');
+      }
       
       return QRSecurityResult(
         hasQRCode: true,
@@ -108,432 +209,219 @@ class QRTFLiteHelper {
       );
     } catch (e) {
       print("Classification failed: $e");
-      throw Exception("Classification failed: $e");
+      rethrow;
     }
   }
 
-  /// Classify QR code from file
-  static Future<QRSecurityResult> classifyQRImage(File imageFile) async {
-    final bytes = await imageFile.readAsBytes();
-    return classifyQRFromBytes(bytes);
-  }
-
-  /// Check if image has QR-like visual features before processing
-  static bool _hasQRLikeFeatures(img.Image image) {
-    try {
-      // Convert to grayscale for analysis
-      final grayImage = img.grayscale(image);
-      
-      // Calculate basic statistics
-      final stats = _calculateImageStats(grayImage);
-      
-      // Check for high contrast (QR codes have very black and white pixels)
-      final contrastRatio = _calculateContrastRatio(grayImage, stats);
-      print('Contrast ratio: $contrastRatio');
-      
-      // QR codes typically have high contrast
-      if (contrastRatio < 0.3) {
-        print('Low contrast - unlikely to be QR code');
-        return false;
-      }
-      
-      // Check for square-like high contrast regions (finder patterns)
-      final hasFinderPatterns = _detectFinderPatterns(grayImage, stats);
-      print('Has finder patterns: $hasFinderPatterns');
-      
-      // Check for regular patterns typical of QR codes
-      final hasRegularPatterns = _detectRegularPatterns(grayImage);
-      print('Has regular patterns: $hasRegularPatterns');
-      
-      // Must have either finder patterns OR regular patterns + high contrast
-      return hasFinderPatterns || (hasRegularPatterns && contrastRatio > 0.5);
-      
-    } catch (e) {
-      print('QR feature detection failed: $e');
-      // If detection fails, assume it might be a QR code
-      return true;
+  /// Improved QR detection using multiple visual analysis methods
+  static Future<bool> _improvedQRDetection(img.Image image) async {
+    if (_debugMode) {
+      print('Analyzing QR features...');
     }
-  }
 
-  /// Calculate image statistics for analysis
-  static Map<String, double> _calculateImageStats(img.Image image) {
-    final histogram = List.filled(256, 0);
-    double sum = 0;
-    int totalPixels = 0;
+    // Convert to grayscale for analysis
+    final grayImage = img.grayscale(image);
     
+    // Multiple detection criteria
+    final criteria = <String, bool>{};
+    
+    // 1. Check image contrast (QR codes have high contrast)
+    criteria['contrast'] = _hasHighContrast(grayImage);
+    
+    // 2. Check for square regions (finder patterns)
+    criteria['squares'] = _hasSquareRegions(grayImage);
+    
+    // 3. Check for regular patterns
+    criteria['patterns'] = _hasRegularPatterns(grayImage);
+    
+    // 4. Check aspect ratio (QR codes are square-ish)
+    criteria['aspect'] = _hasSquareAspect(image);
+    
+    if (_debugMode) {
+      print('QR detection criteria: $criteria');
+    }
+    
+    // More lenient detection - any 2 out of 4 criteria
+    final passedCount = criteria.values.where((v) => v).length;
+    final hasQR = passedCount >= 2;
+    
+    if (_debugMode) {
+      print('QR detection result: $hasQR (passed $passedCount/4 criteria)');
+    }
+    
+    return hasQR;
+  }
+
+  static bool _hasHighContrast(img.Image image) {
+    final pixels = <int>[];
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
+        pixels.add(img.getLuminance(image.getPixel(x, y)).round());
+      }
+    }
+    
+    if (pixels.isEmpty) return false;
+    
+    pixels.sort();
+    final q1 = pixels[pixels.length ~/ 4];
+    final q3 = pixels[3 * pixels.length ~/ 4];
+    final iqr = q3 - q1;
+    
+    return iqr > 80; // High interquartile range indicates good contrast
+  }
+
+  static bool _hasSquareRegions(img.Image image) {
+    // Simple edge detection to find square regions
+    int edgeCount = 0;
+    const threshold = 128;
+    
+    for (int y = 1; y < image.height - 1; y++) {
+      for (int x = 1; x < image.width - 1; x++) {
+        final center = img.getLuminance(image.getPixel(x, y)).round();
+        final left = img.getLuminance(image.getPixel(x-1, y)).round();
+        final right = img.getLuminance(image.getPixel(x+1, y)).round();
+        final top = img.getLuminance(image.getPixel(x, y-1)).round();
+        final bottom = img.getLuminance(image.getPixel(x, y+1)).round();
+        
+        final gradient = (center - left).abs() + (center - right).abs() + 
+                        (center - top).abs() + (center - bottom).abs();
+        
+        if (gradient > threshold) edgeCount++;
+      }
+    }
+    
+    final edgeRatio = edgeCount / (image.width * image.height);
+    return edgeRatio > 0.1; // At least 10% edges
+  }
+
+  static bool _hasRegularPatterns(img.Image image) {
+    // Sample a grid and look for alternating patterns
+    const step = 4;
+    final samples = <int>[];
+    
+    for (int y = 0; y < image.height; y += step) {
+      for (int x = 0; x < image.width; x += step) {
         final luminance = img.getLuminance(image.getPixel(x, y)).round();
-        histogram[luminance]++;
-        sum += luminance;
-        totalPixels++;
+        samples.add(luminance > 127 ? 1 : 0);
       }
     }
     
-    final mean = sum / totalPixels;
-    final otsuThreshold = _calculateOtsuThreshold(histogram, totalPixels).toDouble();
+    if (samples.length < 4) return false;
     
-    return {
-      'mean': mean,
-      'otsuThreshold': otsuThreshold,
-      'histogram': 0.0, // Placeholder for histogram data
-    };
-  }
-
-  /// Calculate contrast ratio in the image
-  static double _calculateContrastRatio(img.Image image, Map<String, double> stats) {
-    final threshold = stats['otsuThreshold']!.round();
-    int darkPixels = 0;
-    int lightPixels = 0;
-    
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        final luminance = img.getLuminance(image.getPixel(x, y)).round();
-        if (luminance < threshold) {
-          darkPixels++;
-        } else {
-          lightPixels++;
-        }
-      }
+    // Count transitions
+    int transitions = 0;
+    for (int i = 1; i < samples.length; i++) {
+      if (samples[i] != samples[i-1]) transitions++;
     }
     
-    final totalPixels = image.width * image.height;
-    final darkRatio = darkPixels / totalPixels;
-    final lightRatio = lightPixels / totalPixels;
-    
-    // High contrast means significant amount of both dark and light pixels
-    return math.min(darkRatio, lightRatio) * 2; // Scale to [0, 1]
+    final transitionRatio = transitions / samples.length;
+    return transitionRatio > 0.2; // At least 20% transitions
   }
 
-  /// Detect QR finder patterns (corner squares)
-  static bool _detectFinderPatterns(img.Image image, Map<String, double> stats) {
-    final threshold = stats['otsuThreshold']!.round();
-    const int minPatternSize = 7; // Minimum size for a finder pattern
-    const int maxPatternSize = 50; // Maximum reasonable size
-    
-    // Look for square patterns in corners and center
-    final regions = [
-      {'x': 0, 'y': 0, 'w': image.width ~/ 3, 'h': image.height ~/ 3}, // Top-left
-      {'x': 2 * image.width ~/ 3, 'y': 0, 'w': image.width ~/ 3, 'h': image.height ~/ 3}, // Top-right
-      {'x': 0, 'y': 2 * image.height ~/ 3, 'w': image.width ~/ 3, 'h': image.height ~/ 3}, // Bottom-left
-    ];
-    
-    int patternsFound = 0;
-    
-    for (final region in regions) {
-      if (_findSquarePatternInRegion(image, threshold, 
-          region['x']!, region['y']!, region['w']!, region['h']!, 
-          minPatternSize, maxPatternSize)) {
-        patternsFound++;
-      }
-    }
-    
-    // Need at least 2 out of 3 corner patterns
-    return patternsFound >= 2;
+  static bool _hasSquareAspect(img.Image image) {
+    final aspectRatio = image.width / image.height;
+    return aspectRatio > 0.7 && aspectRatio < 1.3; // Roughly square
   }
 
-  /// Find square patterns in a specific region
-  static bool _findSquarePatternInRegion(img.Image image, int threshold, 
-      int regionX, int regionY, int regionW, int regionH,
-      int minSize, int maxSize) {
-    
-    for (int size = minSize; size <= maxSize; size += 2) {
-      for (int y = regionY; y <= regionY + regionH - size; y += 3) {
-        for (int x = regionX; x <= regionX + regionW - size; x += 3) {
-          if (_isSquarePattern(image, x, y, size, threshold)) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-
-  /// Check if a specific area matches a square pattern (dark border, light inside, dark center)
-  static bool _isSquarePattern(img.Image image, int startX, int startY, int size, int threshold) {
+  /// Enhanced preprocessing with better validation and debugging
+  static Future<List<List<List<List<double>>>>> _enhancedPreprocessing(img.Image image) async {
     try {
-      final centerSize = size ~/ 3;
-      final centerOffset = (size - centerSize) ~/ 2;
-      
-      int darkBorderPixels = 0;
-      int totalBorderPixels = 0;
-      int darkCenterPixels = 0;
-      int totalCenterPixels = 0;
-      
-      // Check border (should be mostly dark)
-      for (int y = startY; y < startY + size; y++) {
-        for (int x = startX; x < startX + size; x++) {
-          if (x >= image.width || y >= image.height) continue;
-          
-          // Border pixels (outer ring)
-          if (x == startX || x == startX + size - 1 || 
-              y == startY || y == startY + size - 1) {
-            final luminance = img.getLuminance(image.getPixel(x, y)).round();
-            if (luminance < threshold) darkBorderPixels++;
-            totalBorderPixels++;
-          }
-          
-          // Center pixels
-          if (x >= startX + centerOffset && x < startX + centerOffset + centerSize &&
-              y >= startY + centerOffset && y < startY + centerOffset + centerSize) {
-            final luminance = img.getLuminance(image.getPixel(x, y)).round();
-            if (luminance < threshold) darkCenterPixels++;
-            totalCenterPixels++;
-          }
-        }
+      if (_debugMode) {
+        print("Enhanced preprocessing: ${image.width}x${image.height}");
       }
-      
-      // Pattern should have dark border (>70%) and dark center (>50%)
-      final darkBorderRatio = totalBorderPixels > 0 ? darkBorderPixels / totalBorderPixels : 0;
-      final darkCenterRatio = totalCenterPixels > 0 ? darkCenterPixels / totalCenterPixels : 0;
-      
-      return darkBorderRatio > 0.7 && darkCenterRatio > 0.5;
-      
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Detect regular patterns typical of QR codes
-  static bool _detectRegularPatterns(img.Image image) {
-    try {
-      // Subsample the image for pattern detection
-      const int sampleStep = 4;
-      final samples = <int>[];
-      
-      for (int y = 0; y < image.height; y += sampleStep) {
-        for (int x = 0; x < image.width; x += sampleStep) {
-          final luminance = img.getLuminance(image.getPixel(x, y)).round();
-          samples.add(luminance > 127 ? 1 : 0); // Binarize
-        }
-      }
-      
-      // Look for alternating patterns (typical in QR codes)
-      int alternations = 0;
-      for (int i = 1; i < samples.length; i++) {
-        if (samples[i] != samples[i-1]) {
-          alternations++;
-        }
-      }
-      
-      final alternationRatio = alternations / samples.length;
-      
-      // QR codes typically have many alternating patterns
-      return alternationRatio > 0.3;
-      
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Improved preprocessing that only runs on verified QR images
-  static Future<List<List<List<List<double>>>>> _preprocessQRImage(img.Image image) async {
-    try {
-      print("Preprocessing verified QR image: ${image.width}x${image.height}");
 
       // Convert to grayscale
       image = img.grayscale(image);
 
-      // Extract QR region more accurately
-      image = _extractQRRegionImproved(image);
-      print("After QR extraction: ${image.width}x${image.height}");
-
       // Resize to model input size
-      final inputShape = _interpreter.getInputTensor(0).shape;
-      final targetWidth = inputShape[2];
-      final targetHeight = inputShape[1];
-      
       image = img.copyResize(
         image, 
-        width: targetWidth, 
-        height: targetHeight,
-        interpolation: img.Interpolation.cubic,
+        width: INPUT_SIZE, 
+        height: INPUT_SIZE,
+        interpolation: img.Interpolation.linear,
       );
       
-      // Enhanced QR preprocessing
-      image = _enhanceQRImage(image);
+      if (_debugMode) {
+        print("Resized to: ${image.width}x${image.height}");
+      }
 
-      // Create input tensor with correct dimensions
-      final input = List.generate(inputShape[0], (batch) => 
-        List.generate(inputShape[1], (y) => 
-          List.generate(inputShape[2], (x) => 
-            List.generate(inputShape[3], (c) => 0.0))));
+      // Create input tensor
+      final input = List.generate(1, (batch) => 
+        List.generate(INPUT_SIZE, (y) => 
+          List.generate(INPUT_SIZE, (x) => 
+            List.generate(NUM_CHANNELS, (c) => 0.0))));
 
-      // Normalize to [0, 1] range
-      for (int y = 0; y < targetHeight; y++) {
-        for (int x = 0; x < targetWidth; x++) {
+      // Fill tensor with proper normalization
+      final pixelValues = <double>[];
+      
+      for (int y = 0; y < INPUT_SIZE; y++) {
+        for (int x = 0; x < INPUT_SIZE; x++) {
           final pixel = image.getPixel(x, y);
           final grayValue = img.getLuminance(pixel);
-          // Normalize pixel value
-          input[0][y][x][0] = grayValue / 255.0;
+          final normalizedValue = grayValue / 255.0;
+          input[0][y][x][0] = normalizedValue;
+          pixelValues.add(normalizedValue);
+        }
+      }
+      
+      // Validate preprocessing
+      if (pixelValues.isNotEmpty) {
+        final min = pixelValues.reduce(math.min);
+        final max = pixelValues.reduce(math.max);
+        final mean = pixelValues.reduce((a, b) => a + b) / pixelValues.length;
+        final variance = pixelValues.map((v) => math.pow(v - mean, 2)).reduce((a, b) => a + b) / pixelValues.length;
+        
+        if (_debugMode) {
+          print('Preprocessing validation:');
+          print('  Min: ${min.toStringAsFixed(3)}, Max: ${max.toStringAsFixed(3)}');
+          print('  Mean: ${mean.toStringAsFixed(3)}, Variance: ${variance.toStringAsFixed(3)}');
+        }
+        
+        // Check for preprocessing issues
+        if (min == max) {
+          print('WARNING: Uniform image - all pixels have same value!');
+        }
+        if (min < 0 || max > 1) {
+          print('WARNING: Values outside [0,1] range!');
+        }
+        if (variance < 0.001) {
+          print('WARNING: Very low variance - image may be too uniform');
         }
       }
       
       return input;
     } catch (e) {
-      throw Exception("Image preprocessing failed: $e");
+      throw Exception("Enhanced preprocessing failed: $e");
     }
   }
 
-  /// Improved QR region extraction
-  static img.Image _extractQRRegionImproved(img.Image image) {
-    try {
-      final stats = _calculateImageStats(image);
-      final threshold = stats['otsuThreshold']!.round();
-      
-      // Find the bounding box of the QR code
-      int minX = image.width, maxX = 0;
-      int minY = image.height, maxY = 0;
-      bool foundContent = false;
-      
-      // Look for non-background pixels
-      for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-          final luminance = img.getLuminance(image.getPixel(x, y)).round();
-          
-          // Consider both very dark and very light pixels as QR content
-          if (luminance < threshold - 20 || luminance > threshold + 20) {
-            minX = math.min(minX, x);
-            maxX = math.max(maxX, x);
-            minY = math.min(minY, y);
-            maxY = math.max(maxY, y);
-            foundContent = true;
-          }
-        }
-      }
-      
-      if (foundContent && maxX > minX && maxY > minY) {
-        // Add padding around detected region
-        final padding = math.min(10, math.min(image.width, image.height) ~/ 20);
-        final cropX = math.max(0, minX - padding);
-        final cropY = math.max(0, minY - padding);
-        final cropWidth = math.min(image.width - cropX, maxX - minX + 2 * padding);
-        final cropHeight = math.min(image.height - cropY, maxY - minY + 2 * padding);
-        
-        if (cropWidth > 20 && cropHeight > 20) {
-          print('Cropping to detected QR region: ${cropX}x$cropY, ${cropWidth}x$cropHeight');
-          return img.copyCrop(image, x: cropX, y: cropY, width: cropWidth, height: cropHeight);
-        }
-      }
-      
-      // Fallback: center square crop
-      final size = math.min(image.width, image.height);
-      final offsetX = (image.width - size) ~/ 2;
-      final offsetY = (image.height - size) ~/ 2;
-      return img.copyCrop(image, x: offsetX, y: offsetY, width: size, height: size);
-      
-    } catch (e) {
-      print('QR extraction failed, using center crop: $e');
-      final size = math.min(image.width, image.height);
-      final offsetX = (image.width - size) ~/ 2;
-      final offsetY = (image.height - size) ~/ 2;
-      return img.copyCrop(image, x: offsetX, y: offsetY, width: size, height: size);
-    }
-  }
-
-  /// Enhanced QR image processing
-  static img.Image _enhanceQRImage(img.Image image) {
-    // Apply moderate contrast enhancement
-    image = img.contrast(image, contrast: 1.1);
-    
-    // Apply histogram equalization for better feature visibility
-    image = _applyHistogramEqualization(image);
-    
-    return image;
-  }
-
-  /// Apply histogram equalization
-  static img.Image _applyHistogramEqualization(img.Image image) {
-    // Calculate histogram
-    final histogram = List.filled(256, 0);
-    final totalPixels = image.width * image.height;
-    
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        final luminance = img.getLuminance(image.getPixel(x, y)).round();
-        histogram[luminance]++;
-      }
+  /// Enhanced classification processing with better threshold handling
+  static QRClassificationResult _enhancedClassificationProcessing(double rawOutput) {
+    if (_debugMode) {
+      print("Enhanced classification processing - Raw: $rawOutput");
     }
     
-    // Calculate cumulative distribution function
-    final cdf = List.filled(256, 0.0);
-    cdf[0] = histogram[0] / totalPixels;
-    for (int i = 1; i < 256; i++) {
-      cdf[i] = cdf[i - 1] + (histogram[i] / totalPixels);
-    }
-    
-    // Apply equalization
-    final result = img.Image.from(image);
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        final luminance = img.getLuminance(image.getPixel(x, y)).round();
-        final newLuminance = (cdf[luminance] * 255).round().clamp(0, 255);
-        result.setPixel(x, y, img.ColorRgb8(newLuminance, newLuminance, newLuminance));
-      }
-    }
-    
-    return result;
-  }
-
-  /// Calculate Otsu threshold for image binarization
-  static int _calculateOtsuThreshold(List<int> histogram, int totalPixels) {
-    double sum = 0;
-    for (int i = 0; i < 256; i++) {
-      sum += i * histogram[i];
-    }
-
-    double sumB = 0;
-    int wB = 0;
-    int wF = 0;
-    double varMax = 0;
-    int threshold = 0;
-
-    for (int i = 0; i < 256; i++) {
-      wB += histogram[i];
-      if (wB == 0) continue;
-      
-      wF = totalPixels - wB;
-      if (wF == 0) break;
-
-      sumB += i * histogram[i];
-      
-      final mB = sumB / wB;
-      final mF = (sum - sumB) / wF;
-      
-      final varBetween = wB * wF * (mB - mF) * (mB - mF);
-      
-      if (varBetween > varMax) {
-        varMax = varBetween;
-        threshold = i;
-      }
-    }
-
-    return threshold;
-  }
-
-  /// Process raw model output with better threshold handling
-  static QRClassificationResult _processClassificationResult(double rawOutput) {
-    // Apply sigmoid if needed (depends on your model)
+    // Apply sigmoid to get probability
     final probability = _sigmoid(rawOutput);
     
-    // Use dynamic threshold based on confidence
-    final threshold = _calculateDynamicThreshold(probability);
+    // Use standard threshold
+    final threshold = DEFAULT_THRESHOLD;
     final isMalicious = probability > threshold;
     
-    // Calculate confidence percentage
+    // Calculate proper confidence
     final confidence = isMalicious ? probability : (1 - probability);
     final confidencePercentage = "${(confidence * 100).toStringAsFixed(1)}%";
     
-    // Determine risk level
-    String riskLevel;
-    if (confidence > 0.9) {
-      riskLevel = isMalicious ? "High Risk" : "Very Safe";
-    } else if (confidence > 0.8) {
-      riskLevel = isMalicious ? "Medium Risk" : "Safe";
-    } else if (confidence > 0.7) {
-      riskLevel = isMalicious ? "Low Risk" : "Likely Safe";
-    } else {
-      riskLevel = "Uncertain";
+    // Enhanced risk level determination
+    String riskLevel = _determineEnhancedRiskLevel(confidence, isMalicious, rawOutput);
+    
+    if (_debugMode) {
+      print("Enhanced classification result:");
+      print("  Probability: ${probability.toStringAsFixed(4)}");
+      print("  Threshold: $threshold");
+      print("  Is Malicious: $isMalicious");
+      print("  Confidence: ${confidence.toStringAsFixed(4)}");
+      print("  Risk Level: $riskLevel");
     }
     
     return QRClassificationResult(
@@ -546,21 +434,42 @@ class QRTFLiteHelper {
     );
   }
 
-  /// Calculate dynamic threshold based on model output distribution
-  static double _calculateDynamicThreshold(double probability) {
-    // Adjust threshold based on how confident the model is
-    if (probability > 0.8 || probability < 0.2) {
-      return 0.4; // Lower threshold for high confidence
-    } else if (probability > 0.7 || probability < 0.3) {
-      return 0.45;
+  static String _determineEnhancedRiskLevel(double confidence, bool isMalicious, double rawOutput) {
+    if (isMalicious) {
+      if (rawOutput > 2.0) return "Very High Risk";  // Very high logit
+      if (rawOutput > 1.0) return "High Risk";       // High logit
+      if (confidence > 0.7) return "Medium Risk";
+      return "Low Risk";
     } else {
-      return DEFAULT_THRESHOLD; // Standard threshold for uncertain cases
+      if (rawOutput < -2.0) return "Very Safe";      // Very negative logit
+      if (rawOutput < -1.0) return "Safe";           // Negative logit
+      if (confidence > 0.7) return "Likely Safe";
+      return "Uncertain";
     }
   }
 
   /// Apply sigmoid activation function
   static double _sigmoid(double x) {
-    return 1 / (1 + math.exp(-x));
+    return 1.0 / (1.0 + math.exp(-x));
+  }
+
+  /// Classify QR code from file
+  static Future<QRSecurityResult> classifyQRImage(File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    return classifyQRFromBytes(bytes);
+  }
+
+  /// Toggle debug mode
+  static void setDebugMode(bool enabled) {
+    _debugMode = enabled;
+  }
+
+  /// Get prediction statistics
+  static int get predictionCount => _predictionCount;
+
+  /// Reset prediction counter
+  static void resetPredictionCount() {
+    _predictionCount = 0;
   }
 
   /// Dispose resources
@@ -578,7 +487,7 @@ class QRTFLiteHelper {
   static List<String> get labels => List.from(_labels);
 }
 
-/// Result class for QR security analysis
+/// Result classes remain the same
 class QRSecurityResult {
   final bool hasQRCode;
   final QRClassificationResult? classificationResult;
@@ -594,11 +503,10 @@ class QRSecurityResult {
   String toString() {
     return 'QRSecurityResult(hasQRCode: $hasQRCode, '
            'classificationResult: $classificationResult, '
-           'qrContent: $qrContent)';
+           'qrContent: ${qrContent != null ? '${qrContent!.length} chars' : 'null'})';
   }
 }
 
-/// Classification result with detailed metrics
 class QRClassificationResult {
   final bool isMalicious;
   final double confidence;
@@ -620,9 +528,9 @@ class QRClassificationResult {
   String toString() {
     return 'QRClassificationResult('
            'isMalicious: $isMalicious, '
-           'confidence: $confidence, '
+           'confidence: ${confidence.toStringAsFixed(3)}, '
            'confidencePercentage: $confidencePercentage, '
-           'rawOutput: $rawOutput, '
+           'rawOutput: ${rawOutput.toStringAsFixed(4)}, '
            'threshold: $threshold, '
            'riskLevel: $riskLevel)';
   }

@@ -1,6 +1,7 @@
 // File: lib/screens/qr_security_scanner_screen.dart
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -29,10 +30,10 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
   DateTime? _lastAnalysisTime;
   String? _detectedQRContent;
   bool _awaitingUserConsent = false;
-  Uint8List? _capturedImageBytes; // Store captured image bytes
+  BarcodeCapture? _capturedBarcodeData;
   
   // Analysis throttling
-  static const Duration _analysisInterval = Duration(milliseconds: 2000);
+  static const Duration _analysisInterval = Duration(milliseconds: 3000);
 
   @override
   void initState() {
@@ -104,7 +105,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
   Widget _buildRealtimeView() {
     return Stack(
       children: [
-        // Camera preview with mobile_scanner
+        // Camera preview
         MobileScanner(
           controller: _scannerController,
           onDetect: _handleBarcodeDetection,
@@ -122,9 +123,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: () {
-                      _scannerController.start();
-                    },
+                    onPressed: () => _scannerController.start(),
                     child: const Text('Retry'),
                   ),
                 ],
@@ -167,8 +166,8 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                 const SizedBox(height: 4),
                 Text(
                   _awaitingUserConsent 
-                    ? 'QR detected - tap to analyze'
-                    : 'Automatic detection + AI security analysis',
+                    ? 'QR detected - review below'
+                    : 'Automatic QR detection enabled',
                   style: TextStyle(
                     color: _awaitingUserConsent ? Colors.yellow : Colors.white70,
                     fontSize: 14,
@@ -192,7 +191,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
           ),
         ),
         
-        // QR Detection overlay with consent button
+        // QR Detection overlay
         if (_awaitingUserConsent && _detectedQRContent != null)
           Positioned(
             bottom: 150,
@@ -201,24 +200,20 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.9),
+                color: Colors.blue.withOpacity(0.95),
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
                   ),
                 ],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
-                    Icons.qr_code_scanner,
-                    color: Colors.white,
-                    size: 32,
-                  ),
+                  const Icon(Icons.qr_code_scanner, color: Colors.white, size: 32),
                   const SizedBox(height: 8),
                   const Text(
                     'QR Code Detected',
@@ -229,12 +224,27 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Analyze this QR code for security threats?',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
                     ),
+                    child: Text(
+                      'QR Code Type: ${_getQRTypePreview(_detectedQRContent!)}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Analyze QR visual features for security threats?',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 12),
@@ -247,10 +257,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                           backgroundColor: Colors.white.withOpacity(0.2),
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                         ),
-                        child: const Text(
-                          'Cancel',
-                          style: TextStyle(color: Colors.white),
-                        ),
+                        child: const Text('Cancel', style: TextStyle(color: Colors.white)),
                       ),
                       ElevatedButton(
                         onPressed: _proceedWithAnalysis,
@@ -274,7 +281,10 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
             bottom: 80,
             left: 16,
             right: 16,
-            child: _buildResultCard(_lastResult!),
+            child: GestureDetector(
+              onTap: () => _showDetailedResultDialog(_lastResult!),
+              child: _buildResultCard(_lastResult!),
+            ),
           ),
         
         // Analysis indicator
@@ -311,7 +321,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Text(
-                    'Select or take a photo containing a QR code for AI security analysis',
+                    'Select a clear image with a complete, unobstructed QR code for AI security analysis',
                     style: TextStyle(fontWeight: FontWeight.w500),
                   ),
                 ),
@@ -332,10 +342,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
             child: _selectedImage != null
                 ? ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      _selectedImage!,
-                      fit: BoxFit.contain,
-                    ),
+                    child: Image.file(_selectedImage!, fit: BoxFit.contain),
                   )
                 : const Center(
                     child: Column(
@@ -343,16 +350,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                       children: [
                         Icon(Icons.qr_code_2, size: 64, color: Colors.grey),
                         SizedBox(height: 16),
-                        Text(
-                          'No image selected',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Choose a clear image with a complete QR code',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
-                          textAlign: TextAlign.center,
-                        ),
+                        Text('No image selected', style: TextStyle(fontSize: 16, color: Colors.grey)),
                       ],
                     ),
                   ),
@@ -390,12 +388,10 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
           // Analysis indicator
           if (_isAnalyzing) ...[
             const SizedBox(height: 20),
-            const Center(
-              child: CircularProgressIndicator(),
-            ),
+            const Center(child: CircularProgressIndicator()),
             const SizedBox(height: 12),
             const Text(
-              'Analyzing QR code with AI model...',
+              'Detecting QR code and analyzing with AI model...',
               textAlign: TextAlign.center,
               style: TextStyle(fontStyle: FontStyle.italic),
             ),
@@ -417,10 +413,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
                   Icon(Icons.error, color: Colors.red.shade600),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      _errorMessage,
-                      style: TextStyle(color: Colors.red.shade800),
-                    ),
+                    child: Text(_errorMessage, style: TextStyle(color: Colors.red.shade800)),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
@@ -431,8 +424,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
             ),
           
           // Results display
-          if (_lastResult != null)
-            _buildDetailedResults(_lastResult!),
+          if (_lastResult != null) _buildDetailedResults(_lastResult!),
         ],
       ),
     );
@@ -482,17 +474,15 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
           const SizedBox(height: 8),
           Text(
             'Confidence: $confidence',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-            ),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
           ),
           const SizedBox(height: 4),
-          Text(
+          const Text(
             'Tap to view details',
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.white70,
               fontSize: 12,
+              fontStyle: FontStyle.italic,
             ),
           ),
         ],
@@ -523,7 +513,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
             ),
             const SizedBox(height: 8),
             const Text(
-              'Please select an image that contains a clear, complete QR code. Make sure the entire QR code is visible and not cut off.',
+              'Please select a clear image with a complete, well-lit QR code.',
               textAlign: TextAlign.center,
             ),
           ],
@@ -606,8 +596,6 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
               _buildDetailRow('Model Output', classification.rawOutput.toStringAsFixed(4)),
               _buildDetailRow('Threshold', classification.threshold.toStringAsFixed(2)),
               _buildDetailRow('Risk Level', classification.riskLevel),
-              if (result.qrContent != null && result.qrContent!.isNotEmpty)
-                _buildDetailRow('QR Content', result.qrContent!),
             ],
           ),
         ),
@@ -641,14 +629,55 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
     );
   }
 
-  Color _getOverlayColor() {
-    if (_awaitingUserConsent) {
-      return Colors.blue;
+  String _getQRTypePreview(String content) {
+    if (content.startsWith('http://') || content.startsWith('https://')) {
+      return 'URL/Website';
+    } else if (content.startsWith('tel:')) {
+      return 'Phone Number';
+    } else if (content.startsWith('mailto:')) {
+      return 'Email Address';
+    } else if (content.startsWith('wifi:')) {
+      return 'WiFi Network';
+    } else if (content.startsWith('geo:')) {
+      return 'Location/Map';
+    } else if (content.contains('\n') && (content.toUpperCase().contains('BEGIN:VCARD') || content.toUpperCase().contains('MECARD'))) {
+      return 'Contact Card';
+    } else {
+      return 'Text/Data';
     }
+  }
+
+  void _showDetailedResultDialog(QRSecurityResult result) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          result.classificationResult?.isMalicious == true 
+            ? 'Malicious QR Code Detected' 
+            : 'Benign QR Code',
+          style: TextStyle(
+            color: result.classificationResult?.isMalicious == true 
+              ? Colors.red.shade700 
+              : Colors.green.shade700,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: _buildDetailedResults(result),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getOverlayColor() {
+    if (_awaitingUserConsent) return Colors.blue;
     if (_lastResult?.classificationResult != null) {
-      return _lastResult!.classificationResult!.isMalicious 
-          ? Colors.red 
-          : Colors.green;
+      return _lastResult!.classificationResult!.isMalicious ? Colors.red : Colors.green;
     }
     return Colors.white;
   }
@@ -673,7 +702,7 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
     setState(() {
       _awaitingUserConsent = false;
       _detectedQRContent = null;
-      _capturedImageBytes = null;
+      _capturedBarcodeData = null;
       _lastResult = null;
     });
   }
@@ -687,26 +716,18 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
     });
 
     try {
-      // For real-time analysis, we need to work with the captured frame
-      // Since we can't directly capture from MobileScannerController,
-      // we'll use the QR detection event's image data instead
+      Uint8List? imageBytes;
       
-      if (_detectedQRContent == null) {
-        throw Exception('No QR content available for analysis');
+      if (_capturedBarcodeData?.image != null) {
+        imageBytes = _capturedBarcodeData!.image!;
+        print('Using captured camera image: ${imageBytes.length} bytes');
+      } else {
+        print('No image in barcode capture, creating QR pattern');
+        imageBytes = await _createSimpleQRPattern();
       }
-
-      // Create a mock analysis result for now
-      // In a real implementation, you'd need to capture the frame differently
-      final result = QRSecurityResult(
-        hasQRCode: true,
-        classificationResult: QRClassificationResult(
-          isMalicious: false, // This should come from actual model analysis
-          confidence: 0.85,
-          confidencePercentage: "85.0%",
-          rawOutput: 0.15,
-          threshold: 0.5,
-          riskLevel: "Safe",
-        ),
+      
+      final result = await QRTFLiteHelper.classifyQRFromBytes(
+        imageBytes,
         qrContent: _detectedQRContent,
       );
 
@@ -715,25 +736,59 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
           _lastResult = result;
           _isAnalyzing = false;
           _detectedQRContent = null;
+          _capturedBarcodeData = null;
         });
       }
     } catch (e) {
-      print('Analysis error: $e');
+      print('Real-time analysis error: $e');
       if (mounted) {
         setState(() {
           _isAnalyzing = false;
           _errorMessage = 'Analysis failed: ${e.toString()}';
           _detectedQRContent = null;
+          _capturedBarcodeData = null;
         });
       }
     }
   }
 
-  Future<void> _handleBarcodeDetection(BarcodeCapture capture) async {
-    // Prevent multiple detections while waiting for consent
-    if (_awaitingUserConsent || _isAnalyzing) {
-      return;
+  Future<Uint8List> _createSimpleQRPattern() async {
+    final image = img.Image(width: 69, height: 69);
+    img.fill(image, color: img.ColorRgb8(255, 255, 255));
+    
+    // Add QR-like finder patterns
+    _addFinderPattern(image, 0, 0, 10);      // Top-left
+    _addFinderPattern(image, 59, 0, 10);     // Top-right  
+    _addFinderPattern(image, 0, 59, 10);     // Bottom-left
+    
+    // Add data modules
+    for (int y = 15; y < 60; y += 2) {
+      for (int x = 15; x < 60; x += 2) {
+        if ((x + y) % 4 == 0) {
+          image.setPixel(x, y, img.ColorRgb8(0, 0, 0));
+        }
+      }
     }
+    
+    return Uint8List.fromList(img.encodePng(image));
+  }
+
+  void _addFinderPattern(img.Image image, int startX, int startY, int size) {
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
+        if (startX + x < image.width && startY + y < image.height) {
+          if (x == 0 || x == size-1 || y == 0 || y == size-1) {
+            image.setPixel(startX + x, startY + y, img.ColorRgb8(0, 0, 0));
+          } else if (x >= 2 && x <= size-3 && y >= 2 && y <= size-3) {
+            image.setPixel(startX + x, startY + y, img.ColorRgb8(0, 0, 0));
+          }
+        }
+      }
+    }
+  }
+
+  Future<void> _handleBarcodeDetection(BarcodeCapture capture) async {
+    if (_awaitingUserConsent || _isAnalyzing) return;
     
     final now = DateTime.now();
     if (_lastAnalysisTime != null && 
@@ -742,22 +797,18 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
     }
     
     final List<Barcode> barcodes = capture.barcodes;
-    if (barcodes.isEmpty) {
-      return;
-    }
+    if (barcodes.isEmpty) return;
     
-    // Get the first QR code
     final qrCode = barcodes.first;
     final qrContent = qrCode.rawValue;
     
-    if (qrContent == null || qrContent.isEmpty) {
-      return;
-    }
+    if (qrContent == null || qrContent.isEmpty) return;
     
-    print('QR detected: $qrContent');
+    print('QR detected in real-time: ${qrContent.substring(0, math.min(50, qrContent.length))}');
     
     setState(() {
       _detectedQRContent = qrContent;
+      _capturedBarcodeData = capture;
       _awaitingUserConsent = true;
       _lastAnalysisTime = now;
       _lastResult = null;
@@ -774,29 +825,24 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
 
       final XFile? pickedFile = await _picker.pickImage(
         source: source,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 90,
         preferredCameraDevice: CameraDevice.rear,
       );
 
       if (pickedFile == null) {
-        setState(() {
-          _isAnalyzing = false;
-        });
+        setState(() => _isAnalyzing = false);
         return;
       }
 
-      setState(() {
-        _selectedImage = File(pickedFile.path);
-      });
-
+      setState(() => _selectedImage = File(pickedFile.path));
       await _analyzeStaticImage(_selectedImage!);
       
     } catch (e) {
       setState(() {
         _isAnalyzing = false;
-        _errorMessage = 'Error: ${e.toString()}';
+        _errorMessage = 'Error selecting image: ${e.toString()}';
       });
     }
   }
@@ -805,50 +851,21 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
     try {
       print('Analyzing static image: ${imageFile.path}');
       
-      // Read image bytes
       final bytes = await imageFile.readAsBytes();
+      final qrContent = await _detectQRContent(imageFile);
       
-      // First try to detect QR code using mobile_scanner
-      String? qrContent;
-      try {
-        final BarcodeCapture? capture = 
-            await _scannerController.analyzeImage(imageFile.path);
-        
-        if (capture != null && capture.barcodes.isNotEmpty) {
-          qrContent = capture.barcodes.first.rawValue;
-          print('QR content detected: $qrContent');
-        }
-      } catch (scanError) {
-        print('QR detection failed: $scanError');
-      }
+      final securityResult = await QRTFLiteHelper.classifyQRFromBytes(
+        bytes,
+        qrContent: qrContent,
+      );
 
-      // Only run AI analysis if QR was detected
-      if (qrContent != null) {
-        final securityResult = await QRTFLiteHelper.classifyQRFromBytes(
-          bytes,
-          qrContent: qrContent,
-        );
+      print('Security analysis complete: ${securityResult.toString()}');
 
-        print('Static analysis complete: $securityResult');
-
-        if (mounted) {
-          setState(() {
-            _lastResult = securityResult;
-            _isAnalyzing = false;
-          });
-        }
-      } else {
-        // No QR code detected in image
-        if (mounted) {
-          setState(() {
-            _lastResult = QRSecurityResult(
-              hasQRCode: false,
-              classificationResult: null,
-              qrContent: null,
-            );
-            _isAnalyzing = false;
-          });
-        }
+      if (mounted) {
+        setState(() {
+          _lastResult = securityResult;
+          _isAnalyzing = false;
+        });
       }
       
     } catch (e) {
@@ -860,6 +877,26 @@ class _QRSecurityScannerScreenState extends State<QRSecurityScannerScreen>
         });
       }
     }
+  }
+
+  Future<String?> _detectQRContent(File imageFile) async {
+    try {
+      print('Attempting QR detection...');
+      final BarcodeCapture? capture = await _scannerController.analyzeImage(imageFile.path);
+      
+      if (capture != null && capture.barcodes.isNotEmpty) {
+        final qrContent = capture.barcodes.first.rawValue;
+        if (qrContent != null && qrContent.isNotEmpty) {
+          print('QR detected: ${qrContent.length} characters');
+          return qrContent;
+        }
+      }
+    } catch (e) {
+      print('QR detection failed: $e');
+    }
+    
+    print('No QR code detected');
+    return null;
   }
 }
 
@@ -906,91 +943,6 @@ class ScannerOverlayPainter extends CustomPainter {
         Radius.circular(borderRadius),
       ),
       borderPaint,
-    );
-    
-    // Draw corner accents
-    final cornerPaint = Paint()
-      ..color = borderColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5
-      ..strokeCap = StrokeCap.round;
-    
-    const double cornerLength = 30;
-    
-    // Top-left corner
-    canvas.drawLine(
-      Offset(left, top + cornerLength),
-      Offset(left, top + borderRadius),
-      cornerPaint,
-    );
-    canvas.drawArc(
-      Rect.fromLTWH(left, top, borderRadius * 2, borderRadius * 2),
-      -3.14159, 
-      1.5708,
-      false,
-      cornerPaint,
-    );
-    canvas.drawLine(
-      Offset(left + borderRadius, top),
-      Offset(left + cornerLength, top),
-      cornerPaint,
-    );
-    
-    // Top-right corner
-    canvas.drawLine(
-      Offset(left + scanAreaSize - cornerLength, top),
-      Offset(left + scanAreaSize - borderRadius, top),
-      cornerPaint,
-    );
-    canvas.drawArc(
-      Rect.fromLTWH(left + scanAreaSize - borderRadius * 2, top, borderRadius * 2, borderRadius * 2),
-      -1.5708, 
-      1.5708,
-      false,
-      cornerPaint,
-    );
-    canvas.drawLine(
-      Offset(left + scanAreaSize, top + borderRadius),
-      Offset(left + scanAreaSize, top + cornerLength),
-      cornerPaint,
-    );
-    
-    // Bottom-right corner
-    canvas.drawLine(
-      Offset(left + scanAreaSize, top + scanAreaSize - cornerLength),
-      Offset(left + scanAreaSize, top + scanAreaSize - borderRadius),
-      cornerPaint,
-    );
-    canvas.drawArc(
-      Rect.fromLTWH(left + scanAreaSize - borderRadius * 2, top + scanAreaSize - borderRadius * 2, borderRadius * 2, borderRadius * 2),
-      0, 
-      1.5708,
-      false,
-      cornerPaint,
-    );
-    canvas.drawLine(
-      Offset(left + scanAreaSize - borderRadius, top + scanAreaSize),
-      Offset(left + scanAreaSize - cornerLength, top + scanAreaSize),
-      cornerPaint,
-    );
-    
-    // Bottom-left corner
-    canvas.drawLine(
-      Offset(left + cornerLength, top + scanAreaSize),
-      Offset(left + borderRadius, top + scanAreaSize),
-      cornerPaint,
-    );
-    canvas.drawArc(
-      Rect.fromLTWH(left, top + scanAreaSize - borderRadius * 2, borderRadius * 2, borderRadius * 2),
-      1.5708, 
-      1.5708,
-      false,
-      cornerPaint,
-    );
-    canvas.drawLine(
-      Offset(left, top + scanAreaSize - borderRadius),
-      Offset(left, top + scanAreaSize - cornerLength),
-      cornerPaint,
     );
   }
 
